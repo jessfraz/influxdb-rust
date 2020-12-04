@@ -30,6 +30,7 @@ pub struct Client {
     pub(crate) url: Arc<String>,
     pub(crate) parameters: Arc<HashMap<&'static str, String>>,
     pub(crate) client: SurfClient,
+    pub(crate) token: String,
 }
 
 impl Client {
@@ -53,11 +54,13 @@ impl Client {
         S2: Into<String>,
     {
         let mut parameters = HashMap::<&str, String>::new();
-        parameters.insert("db", database.into());
+        parameters.insert("bucket", database.into());
+        parameters.insert("precision", "s".into());
         Client {
             url: Arc::new(url.into()),
             parameters: Arc::new(parameters),
             client: SurfClient::new(),
+            token: Default::default(),
         }
     }
 
@@ -81,16 +84,16 @@ impl Client {
         S2: Into<String>,
     {
         let mut with_auth = self.parameters.as_ref().clone();
-        with_auth.insert("u", username.into());
-        with_auth.insert("p", password.into());
+        with_auth.insert("org", username.into());
         self.parameters = Arc::new(with_auth);
+        self.token = password.into();
         self
     }
 
     /// Returns the name of the database the client is using
     pub fn database_name(&self) -> &str {
         // safe to unwrap: we always set the database name in `Self::new`
-        self.parameters.get("db").unwrap()
+        self.parameters.get("bucket").unwrap()
     }
 
     /// Returns the URL of the InfluxDB installation the client is using
@@ -165,7 +168,7 @@ impl Client {
             error: err.to_string(),
         })?;
 
-        let request_builder = match q.into() {
+        let mut request_builder = match q.into() {
             QueryTypes::Read(_) => {
                 let read_query = query.get();
                 let url = &format!("{}/query", &self.url);
@@ -178,11 +181,11 @@ impl Client {
                     self.client.post(url).query(&parameters)
                 }
             }
-            QueryTypes::Write(write_query) => {
+            QueryTypes::Write(_write_query) => {
                 let url = &format!("{}/write", &self.url);
-                let mut parameters = self.parameters.as_ref().clone();
-                parameters.insert("precision", write_query.get_precision());
+                let parameters = self.parameters.as_ref().clone();
 
+                println!("{:?}", query);
                 self.client.post(url).body(query.get()).query(&parameters)
             }
         }
@@ -190,7 +193,11 @@ impl Client {
             error: err.to_string(),
         })?;
 
+        request_builder = request_builder.header("Authorization", format!("Token {}", self.token));
+
+        println!("{:?}", request_builder);
         let request = request_builder.build();
+        println!("{:?}", request);
         let mut res = self
             .client
             .send(request)
@@ -238,12 +245,11 @@ mod tests {
     fn test_with_auth() {
         let client = Client::new("http://localhost:8068", "database");
         assert_eq!(client.parameters.len(), 1);
-        assert_eq!(client.parameters.get("db").unwrap(), "database");
+        assert_eq!(client.parameters.get("bucket").unwrap(), "database");
 
         let with_auth = client.with_auth("username", "password");
         assert_eq!(with_auth.parameters.len(), 3);
-        assert_eq!(with_auth.parameters.get("db").unwrap(), "database");
-        assert_eq!(with_auth.parameters.get("u").unwrap(), "username");
-        assert_eq!(with_auth.parameters.get("p").unwrap(), "password");
+        assert_eq!(with_auth.parameters.get("bucket").unwrap(), "database");
+        assert_eq!(with_auth.parameters.get("org").unwrap(), "username");
     }
 }
