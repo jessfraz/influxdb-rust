@@ -179,7 +179,6 @@ impl Client {
                         .get(url.replace("api/v2/", ""))
                         .query(&parameters)
                 } else {
-                    println!("{:?}", read_query);
                     Ok(self
                         .client
                         .post(url)
