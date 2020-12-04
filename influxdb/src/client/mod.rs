@@ -55,7 +55,6 @@ impl Client {
     {
         let mut parameters = HashMap::<&str, String>::new();
         parameters.insert("bucket", database.into());
-        parameters.insert("precision", "s".into());
         Client {
             url: Arc::new(url.into()),
             parameters: Arc::new(parameters),
@@ -181,11 +180,10 @@ impl Client {
                     self.client.post(url).query(&parameters)
                 }
             }
-            QueryTypes::Write(_write_query) => {
+            QueryTypes::Write(write_query) => {
                 let url = &format!("{}/write", &self.url);
-                let parameters = self.parameters.as_ref().clone();
-
-                println!("{:?}", query);
+                let mut parameters = self.parameters.as_ref().clone();
+                parameters.insert("precision", write_query.get_precision());
                 self.client.post(url).body(query.get()).query(&parameters)
             }
         }
@@ -195,9 +193,7 @@ impl Client {
 
         request_builder = request_builder.header("Authorization", format!("Token {}", self.token));
 
-        println!("{:?}", request_builder);
         let request = request_builder.build();
-        println!("{:?}", request);
         let mut res = self
             .client
             .send(request)
