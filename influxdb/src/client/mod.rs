@@ -175,9 +175,19 @@ impl Client {
                 parameters.insert("q", read_query.clone());
 
                 if read_query.contains("SELECT") || read_query.contains("SHOW") {
-                    self.client.get(url).query(&parameters)
+                    self.client
+                        .get(url.replace("api/v2/", ""))
+                        .query(&parameters)
                 } else {
-                    self.client.post(url).query(&parameters)
+                    println!("{:?}", read_query);
+                    Ok(self
+                        .client
+                        .post(url)
+                        .body(read_query.as_bytes())
+                        .query(&parameters)
+                        .unwrap()
+                        .header("Content-Type", "application/vnd.flux")
+                        .header("Accept", "application/csv"))
                 }
             }
             QueryTypes::Write(write_query) => {
