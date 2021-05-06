@@ -15,8 +15,7 @@
 //! assert_eq!(client.database_name(), "test");
 //! ```
 
-use futures::prelude::*;
-use surf::{self, Client as SurfClient, StatusCode};
+use reqwest::{self, Client as RClient, StatusCode};
 
 use crate::query::QueryTypes;
 use crate::Error;
@@ -29,7 +28,7 @@ use std::sync::Arc;
 pub struct Client {
     pub(crate) url: Arc<String>,
     pub(crate) parameters: Arc<HashMap<&'static str, String>>,
-    pub(crate) client: SurfClient,
+    pub(crate) client: RClient,
     pub(crate) token: String,
 }
 
@@ -58,7 +57,7 @@ impl Client {
         Client {
             url: Arc::new(url.into()),
             parameters: Arc::new(parameters),
-            client: SurfClient::new(),
+            client: RClient::new(),
             token: Default::default(),
         }
     }
@@ -114,10 +113,20 @@ impl Client {
                 error: format!("{}", err),
             })?;
 
-        let build = res.header("X-Influxdb-Build").unwrap().as_str();
-        let version = res.header("X-Influxdb-Version").unwrap().as_str();
+        let build = res
+            .headers()
+            .get("X-Influxdb-Build")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let version = res
+            .headers()
+            .get("X-Influxdb-Version")
+            .unwrap()
+            .to_str()
+            .unwrap();
 
-        Ok((build.to_owned(), version.to_owned()))
+        Ok((build.to_string(), version.to_string()))
     }
 
     /// Sends a [`ReadQuery`](crate::ReadQuery) or [`WriteQuery`](crate::WriteQuery) to the InfluxDB Server.
@@ -172,21 +181,19 @@ impl Client {
                 let read_query = query.get();
                 let url = &format!("{}/query", &self.url);
                 let mut parameters = self.parameters.as_ref().clone();
-                parameters.insert("q", read_query.clone());
+                parameters.insert("q", read_query.to_string());
 
                 if read_query.contains("SELECT") || read_query.contains("SHOW") {
                     self.client
                         .get(url.replace("api/v2/", ""))
                         .query(&parameters)
                 } else {
-                    Ok(self
-                        .client
+                    self.client
                         .post(url)
-                        .body(read_query.as_bytes())
+                        .body(read_query)
                         .query(&parameters)
-                        .unwrap()
                         .header("Content-Type", "application/vnd.flux")
-                        .header("Accept", "application/csv"))
+                        .header("Accept", "application/csv")
                 }
             }
             QueryTypes::Write(write_query) => {
@@ -195,34 +202,29 @@ impl Client {
                 parameters.insert("precision", write_query.get_precision());
                 self.client.post(url).body(query.get()).query(&parameters)
             }
-        }
-        .map_err(|err| Error::UrlConstructionError {
-            error: err.to_string(),
-        })?;
+        };
 
         request_builder = request_builder.header("Authorization", format!("Token {}", self.token));
 
-        let request = request_builder.build();
-        let mut res = self
+        let request = request_builder.build().unwrap();
+        let res = self
             .client
-            .send(request)
+            .execute(request)
+            .await
             .map_err(|err| Error::ConnectionError {
                 error: err.to_string(),
             })
-            .await?;
+            .unwrap();
 
         match res.status() {
-            StatusCode::Unauthorized => return Err(Error::AuthorizationError),
-            StatusCode::Forbidden => return Err(Error::AuthenticationError),
+            StatusCode::UNAUTHORIZED => return Err(Error::AuthorizationError),
+            StatusCode::FORBIDDEN => return Err(Error::AuthenticationError),
             _ => {}
         }
 
-        let s = res
-            .body_string()
-            .await
-            .map_err(|_| Error::DeserializationError {
-                error: "response could not be converted to UTF-8".to_string(),
-            })?;
+        let s = res.text().await.map_err(|_| Error::DeserializationError {
+            error: "response could not be converted to UTF-8".to_string(),
+        })?;
 
         // todo: improve error parsing without serde
         if s.contains("\"error\"") {
